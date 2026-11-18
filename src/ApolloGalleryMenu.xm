@@ -36,6 +36,7 @@
 #import "ApolloGalleryFeed.h"
 #import "ApolloGallerySource.h"
 #import "ApolloGalleryViewController.h"
+#import "ApolloRedditSearchViewController.h"
 #import "ApolloNativeActionMenus.h"
 #import "ApolloSwiftRuntime.h"
 #import "ApolloClasses.h"
@@ -388,6 +389,28 @@ static NSUInteger ApolloGalleryMenuInsertionIndex(NSArray<UIMenuElement *> *chil
     };
 
     ApolloActionMenuRegister(spec);
+
+    ApolloActionMenuSpec *search = [ApolloActionMenuSpec new];
+    search.identifier = @"SearchPublicUserPosts";
+    search.placement = ApolloActionMenuPlacementAfterLeadingSubmitAffordance;
+    search.inlineSection = YES;
+    search.legacyDismissesSheet = YES;
+    search.matches = ^BOOL(id controller, NSString *title) {
+        return ApolloGalleryMenuProfileIdentifierForOwner(ApolloGalleryMenuOwnerForController(controller)).length > 0;
+    };
+    search.title = ^NSString *(id controller, UITableViewCell *donor) { return @"Search posts from this user"; };
+    search.image = ^UIImage *(id controller, UITableViewCell *donor) { return ApolloActionMenuSymbolIcon(@"magnifyingglass"); };
+    search.perform = ^(id controller) {
+        UIViewController *owner = ApolloGalleryMenuOwnerForController(controller);
+        NSString *username = ApolloUsernameFromProfileViewController(owner);
+        if (!username.length) return;
+        dispatch_block_t open = ^{
+            NSString *query = [@"author:" stringByAppendingString:username];
+            [owner.navigationController pushViewController:[[ApolloRedditSearchViewController alloc] initWithQuery:query] animated:YES];
+        };
+        if (!ApolloNativeActionMenuPerformWithDismissal(controller, open)) open();
+    };
+    ApolloActionMenuRegister(search);
 
     ApolloLog(@"[GalleryMenu] Gallery View menu specs registered");
 }

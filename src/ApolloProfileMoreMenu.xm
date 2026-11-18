@@ -61,6 +61,7 @@
 #import "ApolloCommon.h"
 #import "ApolloSwiftRuntime.h"
 #import "ApolloGalleryViewController.h"
+#import "ApolloRedditSearchViewController.h"
 #import "ApolloProfileEditorWebViewController.h"
 #import "ApolloProfileMoreMenu.h"
 
@@ -127,6 +128,13 @@ static void ApolloProfileMoreMenuOpenGallery(UIViewController *viewController) {
                                         fromViewController:viewController];
 }
 
+static void ApolloProfileMoreMenuSearchPosts(UIViewController *viewController) {
+    NSString *username = ApolloProfileMoreMenuUsername(viewController);
+    if (!username.length) return;
+    [viewController.navigationController pushViewController:[[ApolloRedditSearchViewController alloc]
+        initWithQuery:[@"author:" stringByAppendingString:username]] animated:YES];
+}
+
 static void ApolloProfileMoreMenuShare(UIViewController *viewController) {
     NSString *username = ApolloProfileMoreMenuUsername(viewController);
     if (username.length == 0) {
@@ -161,10 +169,15 @@ UIMenu *ApolloProfileMoreMenuForController(UIViewController *viewController) {
         if (vc) ApolloProfileMoreMenuOpenGallery(vc);
     }];
 
-    // Keep Gallery View in its own section, matching other profile menus.
+    UIAction *search = [UIAction actionWithTitle:@"Search posts from this user"
+        image:[UIImage systemImageNamed:@"magnifyingglass"] identifier:nil handler:^(__kindof UIAction *action) {
+            UIViewController *vc = weakVC;
+            if (vc) ApolloProfileMoreMenuSearchPosts(vc);
+        }];
+    // Keep browsing actions together, separate from editing/sharing.
     UIMenu *gallerySection = [UIMenu menuWithTitle:@"" image:nil identifier:nil
                                            options:UIMenuOptionsDisplayInline
-                                          children:@[gallery]];
+                                          children:@[gallery, search]];
 
     UIAction *edit = [UIAction actionWithTitle:@"Edit Profile"
                                          image:[UIImage systemImageNamed:@"pencil"]
@@ -213,6 +226,9 @@ static NSArray<ApolloActionMenuSpec *> *ApolloProfileMoreMenuSheetRows(UIViewCon
     };
     addRow(@"own-profile-gallery", @"Gallery View", @"square.grid.2x2", ^(UIViewController *vc) {
         ApolloProfileMoreMenuOpenGallery(vc);
+    });
+    addRow(@"own-profile-search", @"Search posts from this user", @"magnifyingglass", ^(UIViewController *vc) {
+        ApolloProfileMoreMenuSearchPosts(vc);
     });
     addRow(@"own-profile-edit", @"Edit Profile", @"pencil", ^(UIViewController *vc) {
         ApolloProfileEditorOpenFromViewController(vc);

@@ -44,6 +44,9 @@ jobs:
       - name: Select Xcode 26.0.1
         run: sudo xcode-select -s /Applications/Xcode_26.0.1.app
 
+      - name: Test Reddit search query and content filters
+        run: sh tests/run_reddit_search_query_tests.sh
+
       - name: Build rootful tweak package
         # The .deb is only an intermediate here (and a short-lived PR artifact),
         # so skip Theos's default lzma -9 packaging (~16s on the runner) in

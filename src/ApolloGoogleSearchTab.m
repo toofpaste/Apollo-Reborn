@@ -32,6 +32,7 @@
 #import <objc/runtime.h>
 
 #import "ApolloGoogleSearchTab.h"
+#import "ApolloRedditSearchViewController.h"
 
 #import "ApolloCommon.h"
 #import "ApolloGoogleSearchViewController.h"
@@ -291,6 +292,12 @@ void ApolloGoogleSearchTabTextDidChange(UIViewController *searchVC, NSString *te
 }
 
 BOOL ApolloGoogleSearchTabHandleSearchButton(UIViewController *searchVC, UISearchBar *bar) {
+    NSString *query = [bar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!ApolloGSGoogleMode() && query.length && searchVC.navigationController) {
+        [bar resignFirstResponder];
+        [searchVC.navigationController pushViewController:[[ApolloRedditSearchViewController alloc] initWithQuery:query] animated:YES];
+        return YES;
+    }
     if (!ApolloGSGoogleMode() || bar.text.length == 0 || !ApolloGSOverlay(searchVC)) return NO;
     ApolloGSSubmit(searchVC, bar.text);
     return YES;
