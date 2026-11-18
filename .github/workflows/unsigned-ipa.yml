@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: unsigned-ipa-${{ github.ref }}
@@ -128,14 +128,22 @@ jobs:
           mkdir -p ./dist/symbols/widgets
           cp -R "$WIDGET_DSYM" ./dist/symbols/widgets/
 
-      - name: Upload unsigned IPAs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Publish unsigned IPAs to GitHub Releases
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.8
         with:
-          name: Apollo-Reborn-unsigned-${{ github.run_number }}
-          path: dist/out/*.ipa
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
+          tag_name: unsigned-build-${{ github.run_number }}-${{ github.run_attempt }}
+          target_commitish: ${{ github.sha }}
+          name: Unsigned iPhone build ${{ github.run_number }} (attempt ${{ github.run_attempt }})
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: dist/out/*.ipa
+          fail_on_unmatched_files: true
+          body: |
+            Download an unsigned .ipa directly from Assets below (no ZIP extraction needed).
+            Choose Standard or GLASS (Liquid Glass); NOEXTENSIONS omits widgets and Safari extensions.
+            Sign the chosen IPA with your sideloading tool before installing it on your iPhone.
+            Built from commit ${{ github.sha }}. No Apple signing certificate is supplied by CI.
 
       - name: Upload debug symbols
         if: always()
@@ -150,10 +158,10 @@ jobs:
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
           ## Unsigned iPhone packages
-          Download the **Apollo-Reborn-unsigned** artifact and unzip it.
+          Download an **.ipa** directly from this build's [release](https://github.com/${{ github.repository }}/releases/tag/unsigned-build-${{ github.run_number }}-${{ github.run_attempt }}).
           Choose Standard or GLASS; NOEXTENSIONS omits widgets and Safari extensions.
           Sign the chosen IPA with your sideloading tool before installing it.
           No Apple certificate or provisioning profile is supplied by CI;
           internal ad-hoc signatures may remain for re-signing.
-          Artifacts expire after 30 days. Debug symbols are uploaded separately.
+          Release IPAs do not have artifact expiration. Debug symbols remain separate artifacts for 30 days.
           SUMMARY
