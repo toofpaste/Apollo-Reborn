@@ -1,49 +1,38 @@
-# Reddit search results
+# Search and Hidden Saved
 
-Submit a query with the keyboard Search button in the Reddit engine to open
-the new results screen. Existing native suggestions and Google/Kagi search
-remain available. The results screen supports editing and resubmitting the query.
+Normal searches again open Apollo's original post results. The original sort/time
+menu remains intact. A separate content menu offers All content (default), Exclude
+NSFW, Only NSFW, Media gallery, and Search indexed comments. Content restrictions
+are applied to the Reddit query and checked against response flags. Existing
+Google/Kagi modes remain available.
 
-- Posts: Relevance, New, Top, Hot, Most comments; All time, Past hour/day/week/month/year.
-- Media: the same search and sort, displayed as a scrolling thumbnail grid of
-  image, gallery, and video posts. Tap a tile to open the post in Apollo.
-- Subreddits: community search, with content filtering. Post sort/time controls
-  are disabled because they do not describe community results.
-- Comments: Reddit's actual comment-search page embedded in a WKWebView. Reddit's
-  public Data API does not support global comment search. This page may require
-  sign-in and uses its own controls; native filters are disabled. Tapped comment
-  permalinks route into Apollo when its native router is available.
+Comment search uses Google-indexed Reddit comments displayed in native rows, not
+an embedded Reddit page. This is not exhaustive Reddit-wide search. Google may
+require verification. Native post filters are disabled for these comment results.
+Media and profile-author search default to All content too.
 
-NSFW choices are mutually exclusive: All content, Exclude NSFW (initial choice),
-Only NSFW. Post search sends an explicit `nsfw:` clause and verifies every
-returned item's `over_18` flag. Community results use `over18`. Missing/invalid
-flags are excluded from either restricted mode. Media filtering happens after
-the same NSFW check. Spoiler previews are concealed.
+## Hidden Saved
 
-Pages are deduplicated and use Reddit's `after` cursor. Scrolling near the bottom
-fetches another page; the status control also loads more or retries errors.
-When a page has no matching media/content, it offers the next page explicitly
-instead of silently stopping or issuing an unbounded sequence of requests.
-Changes to query/tab/filters cancel the request and invalidate stale callbacks.
+Hold the save/bookmark icon on a post's comments quick bar for five seconds to
+save a local bookmark. A short tap retains Apollo's normal save behavior. Hold
+Saved on your own profile for five seconds to open Hidden Saved. Swipe a hidden
+bookmark to remove it. Normal Reddit Saved is not used or modified; an item
+previously saved normally remains there until you unsave it normally.
 
-Profile → More → **Search posts from this user** opens `author:<username>` search
-for public indexed posts. It is available in both legacy and Liquid Glass menus,
-including the signed-in user's own menu. Reddit's indexing and access rules still
-determine what can be found; this does not retrieve private or deleted content.
+The folder is account-specific, device-local, excluded from device backups, and
+written with complete iOS file protection. It closes when the app becomes inactive
+or the account changes. It has no passcode/biometric gate and is a hidden UI feature,
+not a secure vault. Removing the app removes these bookmarks.
 
-## Verification
+## Validation
 
-`sh tests/run_reddit_search_query_tests.sh` on macOS tests request encoding,
-author/OR queries, pagination parameters, strict NSFW matching, media detection,
-and safe preview selection. Both manual Build IPA and push-triggered unsigned IPA
-workflows run it before compilation.
+The Windows checkout supports source/syntax checks only. The macOS IPA workflow
+runs search-query tests and compiles the tweak. Device checks still required:
 
-Device/simulator checklist:
-
-1. Submit a Reddit search; switch between Posts, Media, Subreddits, Comments.
-2. Compare Top / Past hour and New; change filters during a slow request.
-3. Check All / Only / Exclude NSFW with known tagged and untagged results.
-4. Scroll several pages, including a page with no media matches; retry offline.
-5. Open image/video/gallery posts and comments, then return to the results.
-6. Check portrait, landscape, large text, light/dark, and both menu styles.
-7. Open the profile action for yourself and another user; verify the author query.
+- Original post cards and native sort/time menu, including Top / Past hour.
+- All content by default; Only/Exclude NSFW, pagination and rapid filter changes.
+- Native indexed comment rows, verification, retries, and opening comments.
+- Five-second post save: shorter hold cancels, long hold creates one hidden entry
+  without a normal save; repeated holds deduplicate.
+- Own-profile Saved hold opens the folder; another user's profile does not.
+- Remove bookmarks, restart, account switch, and background/foreground isolation.

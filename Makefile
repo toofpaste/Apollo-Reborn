@@ -375,6 +375,8 @@ ApolloReborn_FILES = \
     $(SRC_DIR)/ApolloGoogleSearch.m \
     $(SRC_DIR)/ApolloGoogleSearchViewController.m \
     $(SRC_DIR)/ApolloGoogleSearchTab.m \
+    $(SRC_DIR)/ApolloNativeSearchFilters.xm \
+    $(SRC_DIR)/ApolloHiddenSaved.xm \
     $(SRC_DIR)/ApolloRedditSearchQuery.m \
     $(SRC_DIR)/ApolloRedditSearchViewController.m \
     $(SRC_DIR)/ApolloKagiSearch.m \

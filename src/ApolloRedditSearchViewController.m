@@ -4,6 +4,7 @@
 #import "ApolloState.h"
 #import "ApolloThemeRuntime.h"
 #import <WebKit/WebKit.h>
+#import "ApolloGoogleSearch.h"
 
 @interface ApolloSearchResultCell : UICollectionViewCell
 @property(nonatomic, strong) UIImageView *imageView;
@@ -58,7 +59,8 @@
 @property(nonatomic, strong) UIButton *nsfwButton;
 @property(nonatomic, strong) UIButton *statusButton;
 @property(nonatomic, strong) UICollectionView *collection;
-@property(nonatomic, strong) WKWebView *commentsWebView;
+@property(nonatomic, strong) ApolloGoogleSearchSession *commentSession;
+@property(nonatomic) NSUInteger commentPage;
 @property(nonatomic, strong) NSMutableArray<NSDictionary *> *results;
 @property(nonatomic, strong) NSMutableSet<NSString *> *seen;
 @property(nonatomic, strong) NSURLSessionDataTask *task;
@@ -79,7 +81,7 @@
         _query = [query copy];
         _sort = @"relevance";
         _time = @"all";
-        _nsfw = ApolloSearchNSFWExclude;
+        _nsfw = ApolloSearchNSFWAll;
         _results = [NSMutableArray array];
         _seen = [NSMutableSet set];
     }
@@ -103,7 +105,7 @@
     self.searchBar.delegate = self;
     self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     self.kinds = [[UISegmentedControl alloc] initWithItems:@[@"Posts", @"Media", @"Subreddits", @"Comments"]];
-    self.kinds.selectedSegmentIndex = 0;
+    self.kinds.selectedSegmentIndex = self.initialKind;
     [self.kinds addTarget:self action:@selector(restart) forControlEvents:UIControlEventValueChanged];
     self.sortButton = [self filterButton];
     self.timeButton = [self filterButton];
@@ -223,36 +225,14 @@
     [self.collection reloadData];
     [self.collection setContentOffset:CGPointZero animated:NO];
     [self updateMenus];
-    [self.commentsWebView stopLoading];
-    self.commentsWebView.hidden = YES;
-    self.collection.hidden = self.kinds.selectedSegmentIndex == 3;
-    if (self.kinds.selectedSegmentIndex == 3) {
-        // Global comment search is not a public Data API endpoint. Use Reddit's
-        // actual search UI rather than type=comment (which silently returns posts).
-        if (!self.commentsWebView) {
-            self.commentsWebView = [[WKWebView alloc] initWithFrame:CGRectZero];
-            self.commentsWebView.navigationDelegate = self;
-            self.commentsWebView.translatesAutoresizingMaskIntoConstraints = NO;
-            [self.view addSubview:self.commentsWebView];
-            [NSLayoutConstraint activateConstraints:@[
-                [self.commentsWebView.topAnchor constraintEqualToAnchor:self.collection.topAnchor],
-                [self.commentsWebView.bottomAnchor constraintEqualToAnchor:self.collection.bottomAnchor],
-                [self.commentsWebView.leadingAnchor constraintEqualToAnchor:self.collection.leadingAnchor],
-                [self.commentsWebView.trailingAnchor constraintEqualToAnchor:self.collection.trailingAnchor]
-            ]];
-        }
-        self.commentsWebView.hidden = NO;
-        NSURLComponents *url = [NSURLComponents componentsWithString:@"https://www.reddit.com/search/"];
-        url.queryItems = @[[NSURLQueryItem queryItemWithName:@"q" value:self.query],
-            [NSURLQueryItem queryItemWithName:@"type" value:@"comment"]];
-        [self.statusButton setTitle:@"Reddit comment search • use the page’s filters; sign-in may be required" forState:UIControlStateNormal];
-        [self.commentsWebView loadRequest:[NSURLRequest requestWithURL:url.URL]];
-        return;
-    }
+    [self.commentSession cancel];
+    self.commentPage = 0;
+    self.collection.hidden = NO;
     [self loadNext];
 }
 - (void)loadNext {
-    if (self.loading || !self.more || self.kinds.selectedSegmentIndex == 3) return;
+    if (self.loading || !self.more) return;
+    if (self.kinds.selectedSegmentIndex == 3) { [self loadComments]; return; }
     self.loading = YES;
     self.failed = NO;
     [self.statusButton setTitle:@"Searching…" forState:UIControlStateNormal];
@@ -304,8 +284,7 @@
     [self.task resume];
 }
 - (void)statusTapped {
-    if (self.kinds.selectedSegmentIndex == 3) [self.commentsWebView reload];
-    else [self loadNext];
+    [self loadNext];
 }
 - (NSInteger)collectionView:(UICollectionView *)view numberOfItemsInSection:(NSInteger)section { return self.results.count; }
 - (UICollectionViewCell *)collectionView:(UICollectionView *)view cellForItemAtIndexPath:(NSIndexPath *)path {
@@ -367,17 +346,52 @@
     if (scrollView != self.collection || !scrollView.dragging || self.failed) return;
     if (scrollView.contentOffset.y + scrollView.bounds.size.height > scrollView.contentSize.height - 400) [self loadNext];
 }
-- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
-    NSURL *url = action.request.URL;
-    BOOL reddit = [url.host.lowercaseString isEqual:@"reddit.com"] || [url.host.lowercaseString hasSuffix:@".reddit.com"];
-    if (action.navigationType == WKNavigationTypeLinkActivated && reddit && [url.path containsString:@"/comments/"] && ApolloRouteResolvedURLViaApolloScheme(url)) {
-        decisionHandler(WKNavigationActionPolicyCancel);
-        return;
+- (void)loadComments {
+    if (!self.commentSession) {
+        self.commentSession = [ApolloGoogleSearchSession new];
+        __weak typeof(self) weakSelf = self;
+        self.commentSession.presentVerification = ^(WKWebView *web) {
+            UIViewController *sheet = [UIViewController new];
+            sheet.view = web;
+            [weakSelf presentViewController:sheet animated:YES completion:nil];
+        };
+        self.commentSession.dismissVerification = ^{ [weakSelf dismissViewControllerAnimated:YES completion:nil]; };
     }
-    decisionHandler(WKNavigationActionPolicyAllow);
+    self.loading = YES;
+    NSUInteger generation = self.generation;
+    [self.statusButton setTitle:@"Searching indexed comments with Google…" forState:UIControlStateNormal];
+    __weak typeof(self) weakSelf = self;
+    NSString *query = [self.query stringByAppendingString:@" site:reddit.com/r/ inurl:comments"];
+    [self.commentSession searchQuery:query options:nil page:self.commentPage completion:^(NSArray<ApolloGoogleSearchResult *> *results, BOOL more, NSError *error) {
+        typeof(self) owner = weakSelf;
+        if (!owner || owner.generation != generation) return;
+        owner.loading = NO;
+        owner.failed = error != nil;
+        if (error) { [owner.statusButton setTitle:@"Comment search failed. Tap to retry." forState:UIControlStateNormal]; return; }
+        owner.commentPage++;
+        owner.more = more && owner.commentPage < 10;
+        // Resolve Google's destination before classifying: encrypted Google links
+        // are not known to be posts versus comments until their redirect resolves.
+        dispatch_group_t group = dispatch_group_create();
+        for (ApolloGoogleSearchResult *result in results) {
+            dispatch_group_enter(group);
+            [owner.commentSession resolveResult:result withRedditInfo:NO completion:^(NSError *failure) {
+                if (owner.generation == generation && !failure && result.commentID.length && ![owner.seen containsObject:result.dedupeKey]) {
+                    [owner.seen addObject:result.dedupeKey];
+                    [owner.results addObject:@{@"name": result.dedupeKey, @"title": result.snippet.length ? result.snippet : result.title,
+                        @"subreddit": result.subreddit ?: @"", @"author": result.author ?: @"", @"permalink": result.URL.path ?: @""}];
+                }
+                dispatch_group_leave(group);
+            }];
+        }
+        owner.loading = YES;
+        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+            if (owner.generation != generation) return;
+            owner.loading = NO;
+            [owner.collection reloadData];
+            [owner.statusButton setTitle:owner.more ? @"Google-indexed comments • Tap for more" : @"End of Google-indexed comments" forState:UIControlStateNormal];
+        });
+    }];
 }
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-    if (error.code != NSURLErrorCancelled) [self.statusButton setTitle:@"Comment search couldn’t load. Tap to retry." forState:UIControlStateNormal];
-}
-- (void)dealloc { [_task cancel]; }
+- (void)dealloc { [_task cancel]; [_commentSession cancel]; }
 @end
