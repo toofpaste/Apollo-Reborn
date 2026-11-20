@@ -57,7 +57,7 @@ static void InstallFilters(UIViewController *vc) {
         [choices addObject:action];
     }
     for (NSInteger kind = 1; kind <= 3; kind += 2) {
-        [choices addObject:[UIAction actionWithTitle:kind == 1 ? @"Media gallery" : @"Search indexed comments" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        [choices addObject:[UIAction actionWithTitle:kind == 1 ? @"Media gallery" : @"Search comments" image:nil identifier:nil handler:^(__kindof UIAction *action) {
             UIViewController *owner = weakVC;
             ApolloRedditSearchViewController *results = [[ApolloRedditSearchViewController alloc] initWithQuery:query];
             results.initialKind = kind;

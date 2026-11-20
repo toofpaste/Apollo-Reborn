@@ -50,6 +50,78 @@
 - (void)dealloc { [_imageTask cancel]; }
 @end
 
+@interface ApolloCommentResultCell : UICollectionViewCell
+- (void)showComment:(NSDictionary *)item;
+@end
+
+@implementation ApolloCommentResultCell {
+    UILabel *_communityAndTime;
+    UILabel *_postTitle;
+    UILabel *_excerpt;
+    UILabel *_byline;
+}
+
+- (UILabel *)labelWithStyle:(UIFontTextStyle)style color:(UIColor *)color {
+    UILabel *label = [UILabel new];
+    label.font = [UIFont preferredFontForTextStyle:style];
+    label.adjustsFontForContentSizeCategory = YES;
+    label.numberOfLines = 0;
+    label.textColor = color;
+    return label;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.contentView.backgroundColor = UIColor.secondarySystemBackgroundColor;
+        self.contentView.layer.cornerRadius = 10;
+        _communityAndTime = [self labelWithStyle:UIFontTextStyleCaption1 color:UIColor.secondaryLabelColor];
+        _postTitle = [self labelWithStyle:UIFontTextStyleHeadline color:UIColor.labelColor];
+        _excerpt = [self labelWithStyle:UIFontTextStyleSubheadline color:UIColor.labelColor];
+        _excerpt.numberOfLines = 4;
+        _byline = [self labelWithStyle:UIFontTextStyleCaption1 color:UIColor.secondaryLabelColor];
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_communityAndTime, _postTitle, _excerpt, _byline]];
+        stack.axis = UILayoutConstraintAxisVertical;
+        stack.spacing = 5;
+        stack.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.contentView addSubview:stack];
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:12],
+            [stack.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-12],
+            [stack.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:10],
+            [stack.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-10]
+        ]];
+        self.isAccessibilityElement = YES;
+        self.accessibilityTraits = UIAccessibilityTraitButton;
+    }
+    return self;
+}
+
+- (void)showComment:(NSDictionary *)item {
+    NSString *subreddit = [item[@"subreddit"] length] ? [@"r/" stringByAppendingString:item[@"subreddit"]] : @"Subreddit unavailable";
+    NSDate *date = item[@"created_utc"] ? [NSDate dateWithTimeIntervalSince1970:[item[@"created_utc"] doubleValue]] : nil;
+    NSString *posted = date ? [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterMediumStyle timeStyle:NSDateFormatterShortStyle] : @"Posting time unavailable";
+    _communityAndTime.text = [NSString stringWithFormat:@"%@  •  %@", subreddit, posted];
+    _postTitle.text = [item[@"link_title"] length] ? item[@"link_title"] : @"Post title unavailable";
+    _excerpt.text = item[@"excerpt"];
+    NSMutableArray *details = [NSMutableArray array];
+    if ([item[@"author"] length]) [details addObject:[@"u/" stringByAppendingString:item[@"author"]]];
+    if (item[@"score"]) [details addObject:[NSString stringWithFormat:@"%@ %@", item[@"score"], [item[@"score"] isEqual:@1] ? @"point" : @"points"]];
+    [details addObject:[item[@"sources"] componentsJoinedByString:@", "]];
+    _byline.text = [details componentsJoinedByString:@"  •  "];
+    self.accessibilityLabel = [@[_communityAndTime.text, _postTitle.text, _excerpt.text, _byline.text] componentsJoinedByString:@"\n"];
+}
+
+- (UICollectionViewLayoutAttributes *)preferredLayoutAttributesFittingAttributes:(UICollectionViewLayoutAttributes *)attributes {
+    UICollectionViewLayoutAttributes *fitted = [attributes copy];
+    CGFloat width = attributes.size.width;
+    CGSize size = [self.contentView systemLayoutSizeFittingSize:CGSizeMake(width, 0)
+                                withHorizontalFittingPriority:UILayoutPriorityRequired
+                                      verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
+    fitted.size = CGSizeMake(width, ceil(size.height));
+    return fitted;
+}
+@end
+
 @interface ApolloRedditSearchViewController () <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UISearchBarDelegate, WKNavigationDelegate>
 @property(nonatomic, copy) NSString *query;
 @property(nonatomic, strong) UISearchBar *searchBar;
@@ -127,6 +199,7 @@
     self.collection.delegate = self;
     self.collection.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     [self.collection registerClass:ApolloSearchResultCell.class forCellWithReuseIdentifier:@"result"];
+    [self.collection registerClass:ApolloCommentResultCell.class forCellWithReuseIdentifier:@"comment"];
     UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[self.searchBar, self.kinds, filters, self.statusButton]];
     header.axis = UILayoutConstraintAxisVertical;
     header.spacing = 6;
@@ -152,8 +225,13 @@
     CGFloat width = self.collection.bounds.size.width;
     if (self.layoutWidth != width) {
         self.layoutWidth = width;
+        [self updateCommentSizing];
         [self.collection.collectionViewLayout invalidateLayout];
     }
+}
+- (void)updateCommentSizing {
+    UICollectionViewFlowLayout *layout = (UICollectionViewFlowLayout *)self.collection.collectionViewLayout;
+    layout.estimatedItemSize = self.kinds.selectedSegmentIndex == 3 ? CGSizeMake(MAX(1, self.collection.bounds.size.width - 24), 160) : CGSizeZero;
 }
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
     [super traitCollectionDidChange:previousTraitCollection];
@@ -224,6 +302,7 @@
     self.more = YES;
     [self.results removeAllObjects];
     [self.seen removeAllObjects];
+    [self updateCommentSizing];
     [self.collection reloadData];
     [self.collection setContentOffset:CGPointZero animated:NO];
     [self updateMenus];
@@ -291,8 +370,13 @@
 }
 - (NSInteger)collectionView:(UICollectionView *)view numberOfItemsInSection:(NSInteger)section { return self.results.count; }
 - (UICollectionViewCell *)collectionView:(UICollectionView *)view cellForItemAtIndexPath:(NSIndexPath *)path {
-    ApolloSearchResultCell *cell = [view dequeueReusableCellWithReuseIdentifier:@"result" forIndexPath:path];
     NSDictionary *item = self.results[path.item];
+    if (self.kinds.selectedSegmentIndex == 3) {
+        ApolloCommentResultCell *cell = [view dequeueReusableCellWithReuseIdentifier:@"comment" forIndexPath:path];
+        [cell showComment:item];
+        return cell;
+    }
+    ApolloSearchResultCell *cell = [view dequeueReusableCellWithReuseIdentifier:@"result" forIndexPath:path];
     BOOL gallery = self.kinds.selectedSegmentIndex == 1;
     cell.imageView.hidden = !gallery;
     NSString *title = [item[@"title"] isKindOfClass:NSString.class] ? item[@"title"] : @"";
@@ -304,11 +388,6 @@
         : [NSString stringWithFormat:@"%@\nr/%@ • u/%@ • %@ points%@%@", title, community, author,
             [item[@"score"] isKindOfClass:NSNumber.class] ? item[@"score"] : @0,
             nsfw ? @" • NSFW" : @"", [item[@"is_video"] isEqual:@YES] ? @" • Video" : @""];
-    if (self.kinds.selectedSegmentIndex == 3) {
-        NSDate *date = [NSDate dateWithTimeIntervalSince1970:[item[@"created_utc"] doubleValue]];
-        NSString *age = [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterNoStyle];
-        text = [NSString stringWithFormat:@"%@\nr/%@ • u/%@ • %@ points • %@\n%@",title,community,author,item[@"score"] ?: @0,age,[item[@"sources"] componentsJoinedByString:@", "]];
-    }
     cell.label.text = text;
     cell.accessibilityLabel = text;
     cell.representedID = item[@"name"];
@@ -337,6 +416,7 @@
 }
 - (CGSize)collectionView:(UICollectionView *)view layout:(UICollectionViewLayout *)layout sizeForItemAtIndexPath:(NSIndexPath *)path {
     CGFloat available = MAX(1, view.bounds.size.width - 24);
+    if (self.kinds.selectedSegmentIndex == 3) return CGSizeMake(available, 160);
     BOOL gallery = self.kinds.selectedSegmentIndex == 1;
     NSUInteger columns = gallery ? MAX(2, (NSUInteger)(available / 220)) : 1;
     if (UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory)) columns = 1;
@@ -364,8 +444,10 @@
         owner.loading = loading; owner.more = more;
         owner.results = [rows mutableCopy];
         [owner.collection reloadData];
-        NSString *hint = rows.count ? @"" : @"No matching comments yet. ";
-        [owner.statusButton setTitle:[NSString stringWithFormat:@"%@%@%@",hint,status, loading ? @"" : (more ? @"\nTap to load more / retry" : @"\nEnd of available matches")] forState:UIControlStateNormal];
+        NSString *hint = rows.count ? [NSString stringWithFormat:@"%lu matching comment%@", (unsigned long)rows.count, rows.count == 1 ? @"" : @"s"] :
+            (loading ? @"Looking for matching comments…" : @"No matching comments found");
+        NSString *action = !loading && more ? @" • Tap for more" : @"";
+        [owner.statusButton setTitle:[NSString stringWithFormat:@"%@%@\n%@", hint, action, status] forState:UIControlStateNormal];
     };
     if (self.commentPage++ == 0) [self.commentSession search:self.query sort:self.sort time:self.time];
     else [self.commentSession loadMore];

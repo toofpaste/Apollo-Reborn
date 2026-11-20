@@ -2,26 +2,32 @@
 
 Normal searches again open Apollo's original post results. The original sort/time
 menu remains intact. A separate content menu offers All content (default), Exclude
-NSFW, Only NSFW, Media gallery, and Search indexed comments. Content restrictions
+NSFW, Only NSFW, Media gallery, and Search comments. Content restrictions
 are applied to the Reddit query and checked against response flags. Existing
 Google/Kagi modes remain available.
 
-Comment search now aggregates actual comment bodies from:
+Comment search checks recent Reddit comments alongside PullPush and Arctic Shift.
+Use `subreddit:apolloapp` or `r/apolloapp` to search a community. Use
+`author:example` or `u/example` to search someone's comments. Quotation marks
+keep words together. Unquoted words can appear in any order.
 
-- Live Reddit: scans up to five matching threads per batch (100 loaded comments
-  per thread, depth 8), using the account's normal Reddit transport.
-- PullPush: keyword search across its archive.
-- Arctic Shift: scoped keyword search. Explicit `subreddit:` / `author:` operators
-  are supported; otherwise the first matching Reddit community supplies the scope,
-  which is displayed in the source status.
+For global searches, Apollo reads r/all's comment feed and recent comments in
+communities found through post search or matching archived comments. A scoped search reads the community or
+author feed directly. Each feed scans up to three pages of 100 comments per
+batch when matches are sparse. Apollo also checks replies in up to five
+distinct threads drawn from Reddit's relevant and newest post results.
+Recent replies on older posts qualify for the same comment-date filters.
+PullPush searches its keyword index. Arctic Shift searches the given author or
+community, or the first related community for a global query. When its keyword
+index rejects a scoped search, Apollo checks the archive's chronological listing.
 
-Each source publishes independently, with explicit network/HTTP errors. Results
-are deduplicated by comment ID, combine source labels, and prefer live Reddit data
-when the same comment is available there. Relevance, Newest, Oldest and Top sort
-**loaded matches**, with comment-date time filters. Archive cursors are separate
-from Reddit's post cursor. A batch requests at most 100 entries per archive and
-five Reddit threads; a search caps at ten batches. Coverage is incomplete and
-archives may lag behind live Reddit. Google HTML/redirect scraping is removed.
+Each row shows the subreddit, parent post title, local posting date and time,
+a matching excerpt, author, score and sources when available. Apollo looks up
+missing post titles in batches and combines duplicate comments by ID.
+Relevance favors complete phrases and uses the newer comment to break ties.
+Newest, Oldest and Top sort the matches found so far. Each feed and archive
+pages independently for up to ten batches. Live feeds cover a moving sample
+of Reddit and archive coverage varies.
 
 Provider references: [Arctic Shift API](https://github.com/ArthurHeitmann/arctic_shift/blob/master/api/README.md),
 [PullPush API](https://pullpush.io/), [Reddit API](https://www.reddit.com/dev/api/).
@@ -49,13 +55,13 @@ not a secure vault. Removing the app removes these bookmarks.
 
 ## Validation
 
-The Windows checkout supports source/syntax checks only. The macOS IPA workflow
-runs search-query and comment sorting tests and compiles the tweak. Device checks still required:
+The macOS IPA workflow runs search-query tests, comment model and search-session
+fixtures, and compiles the tweak. Device checks include the following.
 
 - Original post cards and native sort/time menu, including Top / Past hour.
 - All content by default; Only/Exclude NSFW, pagination and rapid filter changes.
-- Aggregated comment rows, source failures, duplicate IDs, all four sorts, time
-  filters, independent pagination, and opening comments.
+- Open a recent comment on an older post, check its title and local posting time,
+  and check wrapping for long titles and larger text sizes.
 - Five-second post save: shorter hold cancels, long hold creates one hidden entry
   without a normal save; repeated holds deduplicate.
 - Own-profile Saved hold opens the folder; another user's profile does not.

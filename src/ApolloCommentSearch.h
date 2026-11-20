@@ -6,5 +6,8 @@
 - (void)cancel;
 @end
 FOUNDATION_EXPORT NSDictionary *ApolloCommentSearchTerms(NSString *query);
-FOUNDATION_EXPORT NSArray *ApolloCommentSearchSorted(NSArray *rows, NSString *sort, NSString *text);
-FOUNDATION_EXPORT NSInteger ApolloCommentSearchRelevance(NSString *body, NSString *query);
+FOUNDATION_EXPORT NSNumber *ApolloCommentSearchTimestamp(id value);
+FOUNDATION_EXPORT NSDictionary *ApolloCommentSearchRow(NSDictionary *raw, NSDictionary *post, NSDictionary *terms, NSTimeInterval after);
+FOUNDATION_EXPORT NSDictionary *ApolloCommentSearchMerge(NSDictionary *previous, NSDictionary *row, NSString *source);
+FOUNDATION_EXPORT NSString *ApolloCommentSearchExcerpt(NSString *plainText, NSDictionary *terms);
+FOUNDATION_EXPORT NSArray *ApolloCommentSearchSorted(NSArray *rows, NSString *sort);
