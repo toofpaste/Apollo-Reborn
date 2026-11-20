@@ -5,6 +5,7 @@
 #import "ApolloAccountCredentials.h"
 #import "ApolloClasses.h"
 #import "ApolloSwiftRuntime.h"
+#import "ApolloHiddenSaved.h"
 
 extern NSString *ApolloUsernameFromProfileViewController(UIViewController *controller);
 static NSURL *HiddenFile(NSString *account) {
@@ -79,6 +80,16 @@ static UIViewController *Owner(UIView *view) {
 @property(nonatomic) BOOL opensFolder;
 @end
 @implementation ApolloHiddenHold
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture
+        shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
+    // The header's shorter long press must wait for this button's five-second
+    // hold. This relationship only participates in touches delivered to the
+    // save button; title/body/sibling-button touches never reach our recognizer.
+    // Leave taps and scrolling alone, and don't change the profile-folder hold.
+    return !self.opensFolder && other != gesture &&
+        [other isKindOfClass:UILongPressGestureRecognizer.class] &&
+        other.view && [gesture.view isDescendantOfView:other.view];
+}
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gesture {
     if (!ApolloActiveAccountUsername().length) return NO;
     UIViewController *owner = Owner(gesture.view);
@@ -116,6 +127,18 @@ static UIViewController *Owner(UIView *view) {
 }
 @end
 static char holdKey;
+BOOL ApolloHiddenSaveShouldSuppressContextMenu(UIContextMenuInteraction *interaction, CGPoint location) {
+    UIView *source = interaction.view;
+    if (!source) return NO;
+    // Hit-test in the menu's coordinate space rather than using a remembered
+    // press or a broad header rectangle. This also follows layout/rotation.
+    UIView *hit = [source hitTest:location withEvent:nil];
+    for (UIView *view = hit; view; view = view.superview) {
+        ApolloHiddenHold *hold = objc_getAssociatedObject(view, &holdKey);
+        if (hold && !hold.opensFolder) return YES;
+    }
+    return NO;
+}
 static void InstallHold(id node, UIView *view, BOOL folder) {
     if (!view || objc_getAssociatedObject(view,&holdKey)) return;
     ApolloHiddenHold *target = [ApolloHiddenHold new]; target.node = node; target.opensFolder = folder;

@@ -14,7 +14,9 @@ Media and profile-author search default to All content too.
 ## Hidden Saved
 
 Hold the save/bookmark icon on a post's comments quick bar for five seconds to
-save a local bookmark. A short tap retains Apollo's normal save behavior. Hold
+save a local bookmark. A short tap retains Apollo's normal save behavior. Holding
+the save button no longer opens the post-header context menu; holding the
+title, body, or other header controls still opens their usual menus. Hold
 Saved on your own profile for five seconds to open Hidden Saved. Swipe a hidden
 bookmark to remove it. Normal Reddit Saved is not used or modified; an item
 previously saved normally remains there until you unsave it normally.

@@ -2,6 +2,7 @@
 #import "ApolloActionMenuLayout.h"
 #import "ApolloCommentNavigator.h"
 #import "ApolloCommon.h"
+#import "ApolloHiddenSaved.h"
 #import "ApolloNativeActionMenus.h"
 #import "ApolloProfileMoreMenu.h"
 #import "ApolloNavigationActions.h"
@@ -1823,6 +1824,10 @@ typedef UIMenu * (^ApolloNativeActionMenuProvider)(NSArray<UIMenuElement *> *sug
 
 %hook _TtC6Apollo31CommentsHeaderSectionController
 - (UIContextMenuConfiguration *)contextMenuInteraction:(UIContextMenuInteraction *)interaction configurationForMenuAtLocation:(CGPoint)location {
+    // Reserve only the save button for Hidden Saved. In particular, don't
+    // disable this interaction on the entire post header or its other buttons.
+    // Returning nil also prevents a late menu when a hold ends before 5 seconds.
+    if (ApolloHiddenSaveShouldSuppressContextMenu(interaction, location)) return nil;
     UIView *previousSourceView = sApolloNativeActionMenuConfigurationSourceView;
     ApolloActionMenuContext previousContext = sApolloActionMenuLongPressContext;
     sApolloNativeActionMenuConfigurationSourceView = interaction.view;
