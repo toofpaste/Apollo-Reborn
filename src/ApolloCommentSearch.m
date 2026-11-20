@@ -8,6 +8,7 @@ static NSString *const Threads = @"Threads";
 static NSString *const PullPush = @"PullPush";
 static NSString *const Arctic = @"Arctic Shift";
 static const NSUInteger BatchLimit = 10;
+static const NSTimeInterval Day = 24 * 60 * 60;
 
 static NSString *String(id value) { return [value isKindOfClass:NSString.class] ? value : @""; }
 
@@ -34,10 +35,15 @@ static NSDictionary *ChildData(id child, NSString *kind) {
 @property(nonatomic, copy) NSDictionary *terms;
 @property(nonatomic, copy) NSString *sort, *token;
 @property(nonatomic, copy) NSArray<NSString *> *relatedSubs;
+@property(nonatomic, copy) NSArray<NSString *> *arcticScopes;
+@property(nonatomic, strong) NSMutableSet *finishedArchiveScopes, *arcticListingScopes;
+@property(nonatomic, copy) NSArray<NSDictionary *> *olderPullPushRows;
+@property(nonatomic) NSTimeInterval newestPullPushMatch;
 @property(nonatomic) NSTimeInterval after;
 @property(nonatomic) NSUInteger generation, pages;
 @property(nonatomic) BOOL loadingTitles;
-@property(nonatomic) BOOL waitingForArchiveScope, scanArcticListing;
+@property(nonatomic) BOOL waitingForArchiveScope;
+@property(nonatomic) BOOL triedArchiveCommunity, arcticUnavailable;
 @end
 
 @implementation ApolloCommentSearch
@@ -61,7 +67,13 @@ static NSDictionary *ChildData(id child, NSString *kind) {
     self.checkedArchiveTitles = [NSMutableSet set];
     self.loadingTitles = NO;
     self.waitingForArchiveScope = NO;
-    self.scanArcticListing = NO;
+    self.triedArchiveCommunity = NO;
+    self.arcticUnavailable = NO;
+    self.arcticScopes = nil;
+    self.finishedArchiveScopes = [NSMutableSet set];
+    self.arcticListingScopes = [NSMutableSet set];
+    self.olderPullPushRows = nil;
+    self.newestPullPushMatch = 0;
     self.pages = 0;
     self.terms = ApolloCommentSearchTerms(query);
     if (![self.terms[@"text"] length] && !self.terms[@"subreddit"] && !self.terms[@"author"]) {
@@ -178,7 +190,8 @@ static NSDictionary *ChildData(id child, NSString *kind) {
     for (NSString *source in @[Recent, Related, Threads, PullPush, Arctic]) {
         if (self.statuses[source]) [labels addObject:[NSString stringWithFormat:@"%@: %@", source, self.statuses[source]]];
     }
-    BOOL more = self.pages < BatchLimit && self.exhausted.count < 5;
+    BOOL more = self.olderPullPushRows.count || (self.pages < BatchLimit && self.exhausted.count < 5);
+    if (!self.active.count && self.olderPullPushRows.count) [labels addObject:@"Older archive matches available"];
     if (self.updated) self.updated(ApolloCommentSearchSorted(rows, self.sort), [labels componentsJoinedByString:@" • "], self.active.count > 0, more);
 }
 
@@ -189,12 +202,17 @@ static NSDictionary *ChildData(id child, NSString *kind) {
         self.waitingForArchiveScope = NO;
         [self startScopedSources];
     }
+    if (!self.active.count && self.olderPullPushRows.count) {
+        BOOL foundNewer = NO;
+        for (NSDictionary *row in self.items.allValues) {
+            if ([row[@"created_utc"] doubleValue] > self.newestPullPushMatch) { foundNewer = YES; break; }
+        }
+        if (!foundNewer && ![self searchAnotherArchiveCommunity]) [self includeOlderPullPushRows];
+    }
     [self publish];
 }
 
-- (BOOL)add:(NSDictionary *)raw post:(NSDictionary *)post source:(NSString *)source {
-    NSDictionary *row = ApolloCommentSearchRow(raw, post, self.terms, self.after);
-    if (!row) return NO;
+- (void)addRow:(NSDictionary *)row source:(NSString *)source {
     NSString *name = row[@"name"];
     NSMutableDictionary *merged = [ApolloCommentSearchMerge(self.items[name], row, source) mutableCopy];
     merged[@"excerpt"] = ApolloCommentSearchExcerpt(ApolloGoogleSearchPlainTextFromMarkdown(merged[@"body"]), self.terms);
@@ -202,47 +220,136 @@ static NSDictionary *ChildData(id child, NSString *kind) {
     if ([row[@"link_title"] length] && [row[@"link_id"] length] && !self.posts[row[@"link_id"]]) {
         self.posts[row[@"link_id"]] = @{@"title": row[@"link_title"], @"subreddit": row[@"subreddit"]};
     }
+}
+
+- (BOOL)add:(NSDictionary *)raw post:(NSDictionary *)post source:(NSString *)source {
+    NSDictionary *row = ApolloCommentSearchRow(raw, post, self.terms, self.after);
+    if (!row) return NO;
+    [self addRow:row source:source];
     return YES;
 }
 
-- (void)archive:(NSString *)source scope:(NSString *)scope {
+- (void)includeOlderPullPushRows {
+    for (NSDictionary *row in self.olderPullPushRows) [self addRow:row source:PullPush];
+    self.olderPullPushRows = nil;
+}
+
+- (BOOL)searchAnotherArchiveCommunity {
+    if (self.triedArchiveCommunity || self.arcticUnavailable || self.terms[@"subreddit"] || self.terms[@"author"]) return NO;
+    // Post search can point at communities where the keyword is in post titles
+    // only. Try the most frequent unsearched community in actual comment hits.
+    NSCountedSet *counts = [NSCountedSet set];
+    NSString *best = nil;
+    for (NSDictionary *row in self.olderPullPushRows) {
+        NSString *sub = [row[@"subreddit"] lowercaseString];
+        if (!sub.length || [self.arcticScopes containsObject:sub]) continue;
+        [counts addObject:sub];
+        if (!best || [counts countForObject:sub] > [counts countForObject:best]) best = sub;
+    }
+    if (!best) return NO;
+    self.triedArchiveCommunity = YES;
+    self.arcticScopes = [(self.arcticScopes ?: @[]) arrayByAddingObject:best];
+    [self.exhausted removeObject:Arctic];
+    [self.active addObject:Arctic];
+    self.statuses[Arctic] = [NSString stringWithFormat:@"checking r/%@", best];
+    [self archive:Arctic scopes:@[best] index:0 summaries:[NSMutableArray array]];
+    return YES;
+}
+
+- (BOOL)shouldDeferPullPushRows:(NSArray *)rows {
+    if (self.pages != 1 || !([self.sort isEqual:@"relevance"] || [self.sort isEqual:@"new"])) return NO;
+    if (rows.count < 10 || self.newestPullPushMatch <= 0 || self.newestPullPushMatch > NSDate.date.timeIntervalSince1970 - 7 * Day) return NO;
+    NSUInteger nearNewest = 0;
+    for (NSDictionary *row in rows) {
+        if ([row[@"created_utc"] doubleValue] > self.newestPullPushMatch - Day) nearNewest++;
+    }
+    return nearNewest * 2 > rows.count;
+}
+
+static NSString *ArchiveCursorKey(NSString *source, NSString *scope) {
+    return [NSString stringWithFormat:@"%@/%@", source, scope.lowercaseString];
+}
+
+- (void)fetchArchive:(NSString *)source scope:(NSString *)scope completion:(void (^)(NSString *, NSInteger))completion {
     BOOL arctic = [source isEqual:Arctic];
     BOOL ascending = [self.sort isEqual:@"old"];
-    NSMutableDictionary *params = [@{arctic ? @"body" : @"q": self.terms[@"text"], arctic ? @"limit" : @"size": @100, @"sort": ascending ? @"asc" : @"desc"} mutableCopy];
-    if (arctic) params[@"body"] = self.scanArcticListing ? nil : [self.terms[@"text"] stringByReplacingOccurrencesOfString:@"\"" withString:@""];
+    NSString *key = ArchiveCursorKey(source, scope);
+    NSUInteger limit = arctic ? 100 / MAX((NSUInteger)1, self.arcticScopes.count) : 100;
+    NSMutableDictionary *params = [@{arctic ? @"body" : @"q": self.terms[@"text"], arctic ? @"limit" : @"size": @(limit), @"sort": ascending ? @"asc" : @"desc"} mutableCopy];
+    if (arctic) params[@"body"] = [self.arcticListingScopes containsObject:key] ? nil : [self.terms[@"text"] stringByReplacingOccurrencesOfString:@"\"" withString:@""];
     else params[@"sort_type"] = @"created_utc";
     if (scope.length) params[@"subreddit"] = scope;
     if (self.terms[@"author"]) params[@"author"] = self.terms[@"author"];
     if (self.after) params[@"after"] = @((long long)self.after);
-    if (self.cursors[source]) params[ascending ? @"after" : @"before"] = self.cursors[source];
+    if (self.cursors[key]) params[ascending ? @"after" : @"before"] = self.cursors[key];
     NSString *base = arctic ? @"https://arctic-shift.photon-reddit.com/api/comments/search" : @"https://api.pullpush.io/reddit/search/comment/";
     [self get:[self url:base params:params] completion:^(id json, NSInteger status) {
         // Busy communities can reject Arctic Shift's body index. Its scoped
         // chronological listing still accepts the date range and cursor.
         if (arctic && [params[@"body"] length] && (status == 400 || status == 422)) {
-            self.scanArcticListing = YES;
-            [self archive:source scope:scope];
+            [self.arcticListingScopes addObject:key];
+            [self fetchArchive:source scope:scope completion:completion];
             return;
         }
         NSArray *data = [json isKindOfClass:NSDictionary.class] && [json[@"data"] isKindOfClass:NSArray.class] ? json[@"data"] : nil;
         id message = data ? json[@"error"] : nil;
         if (!data || ([message isKindOfClass:NSString.class] && [message length]) ||
             ([message isKindOfClass:NSDictionary.class] && [message count])) {
-            [self finish:source status:ResponseError(status)];
+            completion(ResponseError(status), status);
             return;
         }
         NSNumber *edge = nil;
+        NSMutableArray *matches = [NSMutableArray array];
         for (id raw in data) {
             if (![raw isKindOfClass:NSDictionary.class]) continue;
-            [self add:raw post:nil source:source];
+            NSDictionary *row = ApolloCommentSearchRow(raw, nil, self.terms, self.after);
+            if (row) {
+                [matches addObject:row];
+                if (!arctic && !ascending) self.newestPullPushMatch = MAX(self.newestPullPushMatch, [row[@"created_utc"] doubleValue]);
+            }
             NSNumber *created = ApolloCommentSearchTimestamp(raw[@"created_utc"]);
             if (created && (!edge || (ascending ? created.doubleValue > edge.doubleValue : created.doubleValue < edge.doubleValue))) edge = created;
         }
-        NSNumber *last = self.cursors[source];
-        if (data.count < 100 || !edge || (last && (ascending ? edge.doubleValue <= last.doubleValue : edge.doubleValue >= last.doubleValue))) [self.exhausted addObject:source];
-        else self.cursors[source] = @(edge.longLongValue);
-        NSString *scopeLabel = arctic && scope.length ? [@" in r/" stringByAppendingString:scope] : @"";
-        [self finish:source status:[NSString stringWithFormat:@"%lu scanned%@", (unsigned long)data.count, scopeLabel]];
+        if (!arctic && [self shouldDeferPullPushRows:matches]) {
+            // Show a real hit immediately, even when the fresher sources are slow.
+            NSArray *ordered = ApolloCommentSearchSorted(matches, self.sort);
+            [self addRow:ordered.firstObject source:source];
+            self.olderPullPushRows = [ordered subarrayWithRange:NSMakeRange(1, ordered.count - 1)];
+        } else {
+            for (NSDictionary *row in matches) [self addRow:row source:source];
+        }
+        NSNumber *last = self.cursors[key];
+        if (data.count < limit || !edge || (last && (ascending ? edge.doubleValue <= last.doubleValue : edge.doubleValue >= last.doubleValue))) [self.finishedArchiveScopes addObject:key];
+        else self.cursors[key] = @(edge.longLongValue);
+        NSString *summary = [NSString stringWithFormat:@"%lu scanned", (unsigned long)data.count];
+        if (!arctic && self.newestPullPushMatch > 0) {
+            NSString *date = [NSDateFormatter localizedStringFromDate:[NSDate dateWithTimeIntervalSince1970:self.newestPullPushMatch]
+                                                           dateStyle:NSDateFormatterMediumStyle timeStyle:NSDateFormatterNoStyle];
+            summary = [summary stringByAppendingFormat:@", latest match %@", date];
+        }
+        completion(summary, status);
+    }];
+}
+
+// One Arctic request at a time. Each community keeps its own keyword/listing
+// fallback, timestamp cursor and exhaustion state across user-requested pages.
+- (void)archive:(NSString *)source scopes:(NSArray<NSString *> *)scopes index:(NSUInteger)index summaries:(NSMutableArray *)summaries {
+    while (index < scopes.count && [self.finishedArchiveScopes containsObject:ArchiveCursorKey(source, scopes[index])]) index++;
+    if (index == scopes.count) {
+        BOOL done = YES;
+        NSArray *allScopes = [source isEqual:Arctic] ? self.arcticScopes : scopes;
+        for (NSString *scope in allScopes) if (![self.finishedArchiveScopes containsObject:ArchiveCursorKey(source, scope)]) done = NO;
+        if (done) [self.exhausted addObject:source];
+        [self finish:source status:[summaries componentsJoinedByString:@", "]];
+        return;
+    }
+    NSString *scope = scopes[index];
+    [self fetchArchive:source scope:scope completion:^(NSString *summary, NSInteger status) {
+        [summaries addObject:([source isEqual:Arctic] && scope.length) ? [NSString stringWithFormat:@"r/%@ %@", scope, summary] : summary];
+        if ([source isEqual:Arctic] && (!status || status == 429 || status >= 500)) self.arcticUnavailable = YES;
+        if (status == 429) { [self finish:source status:[summaries componentsJoinedByString:@", "]]; return; }
+        if (index + 1 < scopes.count) [self publish];
+        [self archive:source scopes:scopes index:index + 1 summaries:summaries];
     }];
 }
 
@@ -320,13 +427,16 @@ static NSDictionary *ChildData(id child, NSString *kind) {
             if ([row[@"sources"] containsObject:PullPush] && [row[@"subreddit"] length]) [subs addObject:row[@"subreddit"]];
             if (subs.count == 5) break;
         }
+        for (NSDictionary *row in self.olderPullPushRows) {
+            if (subs.count >= 5) break;
+            if ([row[@"subreddit"] length]) [subs addObject:row[@"subreddit"]];
+        }
         self.relatedSubs = subs.array;
         if (!subs.count && [self.active containsObject:PullPush]) {
             self.waitingForArchiveScope = YES;
             return;
         }
     }
-    NSString *scope = self.terms[@"subreddit"] ?: self.relatedSubs.firstObject;
     if ([self.active containsObject:Related]) {
         if (self.relatedSubs.count) {
             NSString *path = [NSString stringWithFormat:@"/r/%@/comments.json", [self.relatedSubs componentsJoinedByString:@"+"]];
@@ -337,7 +447,16 @@ static NSDictionary *ChildData(id child, NSString *kind) {
         }
     }
     if ([self.active containsObject:Arctic]) {
-        if (scope.length || self.terms[@"author"]) [self archive:Arctic scope:scope];
+        if (self.terms[@"subreddit"] || self.terms[@"author"]) self.arcticScopes = @[self.terms[@"subreddit"] ?: @""];
+        else if (!self.arcticScopes.count) {
+            NSMutableOrderedSet *scopes = [NSMutableOrderedSet orderedSet];
+            for (NSString *sub in self.relatedSubs) {
+                [scopes addObject:sub.lowercaseString];
+                if (scopes.count == 3) break;
+            }
+            self.arcticScopes = scopes.array;
+        }
+        if (self.arcticScopes.count) [self archive:Arctic scopes:self.arcticScopes index:0 summaries:[NSMutableArray array]];
         else {
             if ([self.exhausted containsObject:Threads] && [self.exhausted containsObject:PullPush]) [self.exhausted addObject:Arctic];
             [self finish:Arctic status:@"no community found"];
@@ -395,7 +514,13 @@ static NSDictionary *ChildData(id child, NSString *kind) {
 }
 
 - (void)loadMore {
-    if (self.active.count || self.pages >= BatchLimit) return;
+    if (self.active.count) return;
+    if (self.olderPullPushRows.count) {
+        [self includeOlderPullPushRows];
+        [self publish];
+        return;
+    }
+    if (self.pages >= BatchLimit) return;
     self.active = [NSMutableSet setWithArray:@[Recent, Related, Threads, PullPush, Arctic]];
     [self.active minusSet:self.exhausted];
     if (!self.active.count) return;
@@ -408,7 +533,7 @@ static NSDictionary *ChildData(id child, NSString *kind) {
             [NSString stringWithFormat:@"/r/%@/comments.json", self.terms[@"subreddit"] ?: @"all"];
         [self recent:Recent path:path pagesLeft:3 scanned:0];
     }
-    if ([self.active containsObject:PullPush]) [self archive:PullPush scope:self.terms[@"subreddit"]];
+    if ([self.active containsObject:PullPush]) [self archive:PullPush scopes:@[self.terms[@"subreddit"] ?: @""] index:0 summaries:[NSMutableArray array]];
     if (self.terms[@"subreddit"] || self.terms[@"author"] || self.relatedSubs.count || ![self.active containsObject:Threads]) [self startScopedSources];
     if ([self.active containsObject:Threads]) [self findThreads];
 }

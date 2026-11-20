@@ -53,6 +53,14 @@ int main(void) {
             CHECK([row[@"sources"] isEqual:@[@"PullPush", @"Reddit"]]);
         }
         raw[@"link_title"] = @"From the comment listing";
+        NSDictionary *older = @{@"name": @"t1_abc", @"created_utc": @100};
+        NSDictionary *newer = @{@"name": @"t1_abc", @"created_utc": @200};
+        for (NSNumber *olderFirst in @[@YES, @NO]) {
+            NSDictionary *row = olderFirst.boolValue ? ApolloCommentSearchMerge(nil, older, @"PullPush") : ApolloCommentSearchMerge(nil, newer, @"Arctic Shift");
+            row = olderFirst.boolValue ? ApolloCommentSearchMerge(row, newer, @"Arctic Shift") : ApolloCommentSearchMerge(row, older, @"PullPush");
+            CHECK([row[@"created_utc"] isEqual:@200] && [row[@"sources"] count] == 2);
+            CHECK([ApolloCommentSearchMerge(row, live, @"Reddit")[@"created_utc"] isEqual:live[@"created_utc"]]);
+        }
         raw[@"created_utc"] = NSNull.null;
         archive = ApolloCommentSearchRow(raw, nil, terms, 0);
         CHECK(!archive[@"created_utc"]);

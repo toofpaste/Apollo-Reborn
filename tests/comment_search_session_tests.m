@@ -1,4 +1,5 @@
 #import "ApolloCommentSearch.h"
+#import <math.h>
 
 static int failures;
 #define CHECK(...) do { if (!(__VA_ARGS__)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #__VA_ARGS__); failures++; } } while (0)
@@ -46,8 +47,131 @@ static NSDictionary *Thing(NSString *kind, NSDictionary *data) {
     return @{@"kind": kind, @"data": data};
 }
 
+static NSDictionary *ArchiveComment(NSString *identifier, NSString *subreddit, NSTimeInterval created) {
+    return @{@"id": identifier, @"subreddit": subreddit, @"link_id": @"t3_topic", @"link_title": @"Discussion",
+             @"body": @"a keyword match", @"created_utc": @(created)};
+}
+
+static void CheckArchiveCluster(void) {
+    NSTimeInterval now = floor(NSDate.date.timeIntervalSince1970);
+    NSTimeInterval old = now - 40 * 86400;
+    NSMutableArray *cluster = [NSMutableArray array];
+    for (NSUInteger i = 0; i < 100; i++) {
+        [cluster addObject:ArchiveComment([NSString stringWithFormat:@"c%lu", (unsigned long)i], i == 0 ? @"one" : @"two", old - i)];
+    }
+    for (NSString *sort in @[@"relevance", @"new"]) {
+        FixtureSearch *session = [FixtureSearch new];
+        __block NSArray *rows;
+        __block BOOL busy, more;
+        __block NSString *sourceStatus;
+        session.updated = ^(NSArray *found, NSString *status, BOOL loading, BOOL hasMore) {
+            rows = found; sourceStatus = status; busy = loading; more = hasMore;
+        };
+        __block NSUInteger secondCommunityPages = 0;
+        session.response = ^id(NSURL *url, NSDictionary *params) {
+            if ([url.host isEqual:@"api.pullpush.io"]) {
+                if (!params[@"before"]) return @{@"data": cluster};
+                CHECK([params[@"before"] longLongValue] == (long long)old - 99);
+                return @{@"data": @[]};
+            }
+            if ([url.path isEqual:@"/api/comments/search"]) {
+                if ([params[@"subreddit"] isEqual:@"one"]) {
+                    CHECK(!params[@"before"]);
+                    return params[@"body"] ? @422 : @{@"data": @[]};
+                }
+                CHECK([params[@"subreddit"] isEqual:@"two"] && [params[@"body"] isEqual:@"keyword"]);
+                secondCommunityPages++;
+                if (params[@"before"]) {
+                    CHECK([params[@"before"] longLongValue] == (long long)now - 49);
+                    return @{@"data": @[]};
+                }
+                CHECK([params[@"limit"] integerValue] == 50);
+                NSMutableArray *fresh = [NSMutableArray array];
+                for (NSUInteger i = 0; i < 50; i++) {
+                    [fresh addObject:ArchiveComment([NSString stringWithFormat:@"n%lu", (unsigned long)i], @"two", now - i)];
+                }
+                return @{@"data": fresh};
+            }
+            return Listing(@[], nil);
+        };
+        [session search:@"keyword" sort:sort time:@"all"];
+        [session deliver];
+        CHECK(!busy && more && rows.count == 51);
+        CHECK([sourceStatus containsString:@"Older archive matches available"]);
+        CHECK([rows.firstObject[@"created_utc"] doubleValue] == now);
+        CHECK([rows.lastObject[@"created_utc"] doubleValue] == old);
+        [session loadMore];
+        CHECK(!session.requests.count && !busy && more && rows.count == 150);
+        CHECK([rows.lastObject[@"created_utc"] doubleValue] == old - 99);
+        [session loadMore];
+        [session deliver];
+        CHECK(!busy && !more && rows.count == 150 && secondCommunityPages == 2);
+    }
+
+    FixtureSearch *recovery = [FixtureSearch new];
+    __block NSArray *recovered;
+    __block BOOL hasOlder;
+    recovery.updated = ^(NSArray *found, NSString *status, BOOL loading, BOOL hasMore) {
+        (void)status; (void)loading;
+        recovered = found; hasOlder = hasMore;
+    };
+    NSMutableArray *searched = [NSMutableArray array];
+    recovery.response = ^id(NSURL *url, NSDictionary *params) {
+        if ([url.path isEqual:@"/search.json"]) {
+            return Listing(@[Thing(@"t3", @{@"id": @"xyz", @"subreddit": @"OTHER", @"title": @"keyword"})], nil);
+        }
+        if ([url.host isEqual:@"api.pullpush.io"]) return @{@"data": [cluster subarrayWithRange:NSMakeRange(0, 12)]};
+        if ([url.path isEqual:@"/api/comments/search"]) {
+            [searched addObject:params[@"subreddit"]];
+            NSArray *found = [params[@"subreddit"] isEqual:@"two"] ? @[ArchiveComment(@"fresh", @"two", now)] : @[];
+            return @{@"data": found};
+        }
+        return Listing(@[], nil);
+    };
+    [recovery search:@"keyword" sort:@"relevance" time:@"all"];
+    [recovery deliver];
+    CHECK([searched isEqual:@[@"other", @"two"]]);
+    CHECK(recovered.count == 2 && hasOlder);
+    [recovery loadMore];
+    CHECK(recovered.count == 13 && !hasOlder && !recovery.requests.count);
+
+    // Historical-only searches still see their matches immediately. A genuine
+    // current spike and the explicit Top and Oldest sorts also stay intact.
+    for (NSString *sort in @[@"relevance", @"top", @"old", @"new"]) {
+        FixtureSearch *session = [FixtureSearch new];
+        __block NSArray *rows;
+        __block BOOL more;
+        session.updated = ^(NSArray *found, NSString *status, BOOL loading, BOOL hasMore) {
+            (void)status; (void)loading;
+            rows = found; more = hasMore;
+        };
+        BOOL currentSpike = [sort isEqual:@"new"];
+        session.response = ^id(NSURL *url, NSDictionary *params) {
+            (void)params;
+            if ([url.host isEqual:@"api.pullpush.io"]) {
+                NSMutableArray *page = [[cluster subarrayWithRange:NSMakeRange(0, 12)] mutableCopy];
+                if (currentSpike) {
+                    for (NSUInteger i = 0; i < page.count; i++) page[i] = ArchiveComment(page[i][@"id"], @"two", now - 3600 - i);
+                }
+                return @{@"data": page};
+            }
+            if ([url.path isEqual:@"/api/comments/search"]) {
+                NSArray *other = [sort isEqual:@"relevance"] ? @[] : @[ArchiveComment(@"fresh", @"two", now)];
+                return @{@"data": other};
+            }
+            return Listing(@[], nil);
+        };
+        [session search:@"subreddit:two keyword" sort:sort time:@"all"];
+        [session deliver];
+        CHECK(!more);
+        // The first archived row belongs to r/one and is excluded unless rewritten.
+        CHECK(rows.count == (currentSpike ? 13u : ([sort isEqual:@"relevance"] ? 11u : 12u)));
+    }
+}
+
 int main(void) {
     @autoreleasepool {
+        CheckArchiveCluster();
         FixtureSearch *session = [FixtureSearch new];
         __block NSArray *rows = nil;
         __block BOOL busy = YES, more = YES;

@@ -17,9 +17,20 @@ author feed directly. Each feed scans up to three pages of 100 comments per
 batch when matches are sparse. Apollo also checks replies in up to five
 distinct threads drawn from Reddit's relevant and newest post results.
 Recent replies on older posts qualify for the same comment-date filters.
-PullPush searches its keyword index. Arctic Shift searches the given author or
-community, or the first related community for a global query. When its keyword
-index rejects a scoped search, Apollo checks the archive's chronological listing.
+PullPush reports the date of its newest matching comment on descending searches.
+Arctic Shift searches the given author or community. For a global query, Apollo
+checks up to three related communities with independent cursors and splits its
+100-comment archive page budget among them. When a community rejects a keyword
+search, Apollo checks its chronological listing.
+
+For Relevance and Newest, Apollo checks whether the first PullPush page has at
+least ten matches, most fall within a single 24-hour span at the head of the
+page, and its newest match is over a week old. Apollo shows one match from
+that page immediately. If the other sources find newer matches, the rest of
+the older page is available through **Tap for more**. If
+needed, a global search checks one additional community where archived
+comments frequently matched. Searches with only historical matches show them
+on the first page. Top and Oldest include historical matches immediately.
 
 Each row shows the subreddit, parent post title, local posting date and time,
 a matching excerpt, author, score and sources when available. Apollo looks up

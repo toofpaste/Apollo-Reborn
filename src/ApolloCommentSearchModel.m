@@ -117,9 +117,12 @@ NSDictionary *ApolloCommentSearchRow(NSDictionary *raw, NSDictionary *post, NSDi
 
 NSDictionary *ApolloCommentSearchMerge(NSDictionary *previous, NSDictionary *row, NSString *source) {
     NSMutableOrderedSet *sources = [NSMutableOrderedSet orderedSetWithArray:previous[@"sources"] ?: @[]];
-    BOOL keepLive = [sources containsObject:@"Reddit"] && ![source isEqual:@"Reddit"];
-    NSMutableDictionary *merged = [(keepLive ? previous : row) mutableCopy];
-    NSDictionary *other = keepLive ? row : previous;
+    // Adding a historical page later must not replace the timestamp and
+    // contents already obtained from live Reddit or the primary scoped archive.
+    BOOL keepPrevious = ![source isEqual:@"Reddit"] && ([sources containsObject:@"Reddit"] ||
+                        ([source isEqual:@"PullPush"] && [sources containsObject:@"Arctic Shift"]));
+    NSMutableDictionary *merged = [(keepPrevious ? previous : row) mutableCopy];
+    NSDictionary *other = keepPrevious ? row : previous;
     for (NSString *field in @[@"link_id", @"link_title", @"subreddit", @"author", @"created_utc", @"score"]) {
         if ((!merged[field] || [merged[field] isEqual:@""]) && other[field]) merged[field] = other[field];
     }
