@@ -78,7 +78,9 @@ static void InstallFilters(UIViewController *vc) {
     NSURLRequest *filtered = FilteredRequest(request);
     NSInteger mode = [[NSURLProtocol propertyForKey:@"ApolloNativeSearchMode" inRequest:filtered] integerValue];
     if (!mode || !completion) return %orig(filtered, completion);
-    return %orig(filtered, ^(NSData *data, NSURLResponse *response, NSError *error) {
+    // Logos cannot parse this multiline block literal inside %orig's arguments.
+    // Keep the callback separate, as with the other request hooks in the tweak.
+    void (^filteredCompletion)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *response, NSError *error) {
         id json = data ? [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil] : nil;
         if ([json isKindOfClass:NSMutableDictionary.class] && [json[@"data"] isKindOfClass:NSMutableDictionary.class] && [json[@"data"][@"children"] isKindOfClass:NSArray.class]) {
             NSMutableArray *accepted = [NSMutableArray array];
@@ -91,7 +93,8 @@ static void InstallFilters(UIViewController *vc) {
             data = [NSJSONSerialization dataWithJSONObject:json options:0 error:nil] ?: data;
         }
         completion(data,response,error);
-    });
+    };
+    return %orig(filtered, filteredCompletion);
 }
 %end
 %ctor { filters = [NSMutableDictionary dictionary]; %init; }
