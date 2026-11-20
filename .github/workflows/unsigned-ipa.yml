@@ -45,7 +45,9 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_26.0.1.app
 
       - name: Test Reddit search query and content filters
-        run: sh tests/run_reddit_search_query_tests.sh
+        run: |
+          sh tests/run_reddit_search_query_tests.sh
+          sh tests/run_comment_search_model_tests.sh
 
       - name: Build rootful tweak package
         # The .deb is only an intermediate here (and a short-lived PR artifact),

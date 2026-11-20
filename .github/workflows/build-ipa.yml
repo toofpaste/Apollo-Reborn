@@ -108,7 +108,9 @@ jobs:
 
       - name: Test Reddit search query and content filters
         if: inputs.inject_tweak
-        run: sh tests/run_reddit_search_query_tests.sh
+        run: |
+          sh tests/run_reddit_search_query_tests.sh
+          sh tests/run_comment_search_model_tests.sh
 
       - name: Build rootful tweak package
         if: inputs.inject_tweak

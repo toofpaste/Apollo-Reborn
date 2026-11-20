@@ -4,7 +4,7 @@
 #import "ApolloState.h"
 #import "ApolloThemeRuntime.h"
 #import <WebKit/WebKit.h>
-#import "ApolloGoogleSearch.h"
+#import "ApolloCommentSearch.h"
 
 @interface ApolloSearchResultCell : UICollectionViewCell
 @property(nonatomic, strong) UIImageView *imageView;
@@ -59,7 +59,7 @@
 @property(nonatomic, strong) UIButton *nsfwButton;
 @property(nonatomic, strong) UIButton *statusButton;
 @property(nonatomic, strong) UICollectionView *collection;
-@property(nonatomic, strong) ApolloGoogleSearchSession *commentSession;
+@property(nonatomic, strong) ApolloCommentSearch *commentSession;
 @property(nonatomic) NSUInteger commentPage;
 @property(nonatomic, strong) NSMutableArray<NSDictionary *> *results;
 @property(nonatomic, strong) NSMutableSet<NSString *> *seen;
@@ -170,8 +170,10 @@
 }
 - (void)updateMenus {
     __weak typeof(self) weakSelf = self;
-    NSArray *keys = @[@"relevance", @"new", @"top", @"hot", @"comments"];
-    NSArray *titles = @[@"Relevance", @"New", @"Top", @"Hot", @"Most comments"];
+    BOOL comments = self.kinds.selectedSegmentIndex == 3;
+    NSArray *keys = comments ? @[@"relevance", @"new", @"top", @"old"] : @[@"relevance", @"new", @"top", @"hot", @"comments"];
+    NSArray *titles = comments ? @[@"Relevance", @"Newest", @"Top", @"Oldest"] : @[@"Relevance", @"New", @"Top", @"Hot", @"Most comments"];
+    if (![keys containsObject:self.sort]) self.sort = @"relevance";
     NSMutableArray *actions = [NSMutableArray array];
     for (NSUInteger i = 0; i < keys.count; i++) {
         NSString *key = keys[i];
@@ -181,7 +183,7 @@
         action.state = [self.sort isEqual:key] ? UIMenuElementStateOn : UIMenuElementStateOff;
         [actions addObject:action];
     }
-    self.sortButton.menu = [UIMenu menuWithTitle:@"Sort posts" children:actions];
+    self.sortButton.menu = [UIMenu menuWithTitle:comments ? @"Sort loaded comments" : @"Sort posts" children:actions];
     [self.sortButton setTitle:titles[[keys indexOfObject:self.sort]] forState:UIControlStateNormal];
     keys = @[@"all", @"hour", @"day", @"week", @"month", @"year"];
     titles = @[@"All time", @"Past hour", @"Past day", @"Past week", @"Past month", @"Past year"];
@@ -207,7 +209,7 @@
     }
     self.nsfwButton.menu = [UIMenu menuWithTitle:@"NSFW filter" children:actions];
     [self.nsfwButton setTitle:titles[self.nsfw] forState:UIControlStateNormal];
-    BOOL posts = self.kinds.selectedSegmentIndex < 2;
+    BOOL posts = self.kinds.selectedSegmentIndex != 2;
     self.sortButton.enabled = posts;
     self.timeButton.enabled = posts;
     self.nsfwButton.enabled = self.kinds.selectedSegmentIndex != 3;
@@ -243,6 +245,7 @@
     NSURL *url = ApolloRedditSearchURL(self.query, communities, communities ? @"relevance" : self.sort,
         communities ? @"all" : self.time, self.nsfw, cursor, token.length > 0);
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:30];
+    [NSURLProtocol setProperty:@YES forKey:@"ApolloSearchOwnsFilters" inRequest:request];
     if (token.length) [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
     if (sUserAgent.length) [request setValue:sUserAgent forHTTPHeaderField:@"User-Agent"];
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
@@ -301,6 +304,11 @@
         : [NSString stringWithFormat:@"%@\nr/%@ • u/%@ • %@ points%@%@", title, community, author,
             [item[@"score"] isKindOfClass:NSNumber.class] ? item[@"score"] : @0,
             nsfw ? @" • NSFW" : @"", [item[@"is_video"] isEqual:@YES] ? @" • Video" : @""];
+    if (self.kinds.selectedSegmentIndex == 3) {
+        NSDate *date = [NSDate dateWithTimeIntervalSince1970:[item[@"created_utc"] doubleValue]];
+        NSString *age = [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterNoStyle];
+        text = [NSString stringWithFormat:@"%@\nr/%@ • u/%@ • %@ points • %@\n%@",title,community,author,item[@"score"] ?: @0,age,[item[@"sources"] componentsJoinedByString:@", "]];
+    }
     cell.label.text = text;
     cell.accessibilityLabel = text;
     cell.representedID = item[@"name"];
@@ -347,51 +355,20 @@
     if (scrollView.contentOffset.y + scrollView.bounds.size.height > scrollView.contentSize.height - 400) [self loadNext];
 }
 - (void)loadComments {
-    if (!self.commentSession) {
-        self.commentSession = [ApolloGoogleSearchSession new];
-        __weak typeof(self) weakSelf = self;
-        self.commentSession.presentVerification = ^(WKWebView *web) {
-            UIViewController *sheet = [UIViewController new];
-            sheet.view = web;
-            [weakSelf presentViewController:sheet animated:YES completion:nil];
-        };
-        self.commentSession.dismissVerification = ^{ [weakSelf dismissViewControllerAnimated:YES completion:nil]; };
-    }
-    self.loading = YES;
+    if (!self.commentSession) self.commentSession = [ApolloCommentSearch new];
     NSUInteger generation = self.generation;
-    [self.statusButton setTitle:@"Searching indexed comments with Google…" forState:UIControlStateNormal];
     __weak typeof(self) weakSelf = self;
-    NSString *query = [self.query stringByAppendingString:@" site:reddit.com/r/ inurl:comments"];
-    [self.commentSession searchQuery:query options:nil page:self.commentPage completion:^(NSArray<ApolloGoogleSearchResult *> *results, BOOL more, NSError *error) {
+    self.commentSession.updated = ^(NSArray *rows, NSString *status, BOOL loading, BOOL more) {
         typeof(self) owner = weakSelf;
-        if (!owner || owner.generation != generation) return;
-        owner.loading = NO;
-        owner.failed = error != nil;
-        if (error) { [owner.statusButton setTitle:@"Comment search failed. Tap to retry." forState:UIControlStateNormal]; return; }
-        owner.commentPage++;
-        owner.more = more && owner.commentPage < 10;
-        // Resolve Google's destination before classifying: encrypted Google links
-        // are not known to be posts versus comments until their redirect resolves.
-        dispatch_group_t group = dispatch_group_create();
-        for (ApolloGoogleSearchResult *result in results) {
-            dispatch_group_enter(group);
-            [owner.commentSession resolveResult:result withRedditInfo:NO completion:^(NSError *failure) {
-                if (owner.generation == generation && !failure && result.commentID.length && ![owner.seen containsObject:result.dedupeKey]) {
-                    [owner.seen addObject:result.dedupeKey];
-                    [owner.results addObject:@{@"name": result.dedupeKey, @"title": result.snippet.length ? result.snippet : result.title,
-                        @"subreddit": result.subreddit ?: @"", @"author": result.author ?: @"", @"permalink": result.URL.path ?: @""}];
-                }
-                dispatch_group_leave(group);
-            }];
-        }
-        owner.loading = YES;
-        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-            if (owner.generation != generation) return;
-            owner.loading = NO;
-            [owner.collection reloadData];
-            [owner.statusButton setTitle:owner.more ? @"Google-indexed comments • Tap for more" : @"End of Google-indexed comments" forState:UIControlStateNormal];
-        });
-    }];
+        if (!owner || owner.generation != generation || owner.kinds.selectedSegmentIndex != 3) return;
+        owner.loading = loading; owner.more = more;
+        owner.results = [rows mutableCopy];
+        [owner.collection reloadData];
+        NSString *hint = rows.count ? @"" : @"No matching comments yet. ";
+        [owner.statusButton setTitle:[NSString stringWithFormat:@"%@%@%@",hint,status, loading ? @"" : (more ? @"\nTap to load more / retry" : @"\nEnd of available matches")] forState:UIControlStateNormal];
+    };
+    if (self.commentPage++ == 0) [self.commentSession search:self.query sort:self.sort time:self.time];
+    else [self.commentSession loadMore];
 }
 - (void)dealloc { [_task cancel]; [_commentSession cancel]; }
 @end

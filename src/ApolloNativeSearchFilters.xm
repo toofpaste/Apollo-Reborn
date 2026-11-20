@@ -7,7 +7,8 @@
 static NSMutableDictionary *filters;
 static char menuKey;
 static NSURLRequest *FilteredRequest(NSURLRequest *request) {
-    if ([NSURLProtocol propertyForKey:@"ApolloNativeSearchMode" inRequest:request]) return request;
+    if ([NSURLProtocol propertyForKey:@"ApolloSearchOwnsFilters" inRequest:request] ||
+        [NSURLProtocol propertyForKey:@"ApolloNativeSearchMode" inRequest:request]) return request;
     NSURLComponents *url = [NSURLComponents componentsWithURL:request.URL resolvingAgainstBaseURL:NO];
     NSString *host = url.host.lowercaseString;
     if (!([host isEqual:@"reddit.com"] || [host hasSuffix:@".reddit.com"]) ||
