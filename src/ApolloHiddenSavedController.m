@@ -144,7 +144,16 @@
 - (BOOL)validAccount { return [self.account isEqual:ApolloActiveAccountUsername().lowercaseString]; }
 - (void)stopPlayers { for (ApolloHiddenMediaCell *cell in self.tableView.visibleCells) [cell setPlaybackActive:NO]; }
 - (void)lock { self.generation++;[self.task cancel];[self stopPlayers];self.rows=@[];[self.metadata removeAllObjects];[self.media removeAllObjects];[self.tableView reloadData];[self.navigationController popToRootViewControllerAnimated:NO]; }
-- (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated];if (![self validAccount]) [self lock]; }
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if (![self validAccount]) { [self lock]; return; }
+    NSArray *rows = ApolloHiddenSavedRead(self.account);
+    if ([rows isEqualToArray:self.rows]) return;
+    self.rows = rows;
+    [self setEditing:NO animated:NO];
+    [self updateEmptyState];
+    [self refreshMetadata];
+}
 - (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated];[self updatePlayback]; }
 - (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated];[self stopPlayers]; }
 - (void)changeMode { [self stopPlayers];[self.tableView reloadData];[self restoreSelection];[self updatePlayback]; }
@@ -159,7 +168,7 @@
 }
 - (void)removeSelected {
     if (![self validAccount] || !self.selection.count) return;
-    NSMutableArray *remaining=[NSMutableArray array];for (NSDictionary *row in self.rows) if (![self.selection containsObject:row[@"id"]]) [remaining addObject:row];
+    NSMutableArray *remaining=[NSMutableArray array];for (NSDictionary *row in ApolloHiddenSavedRead(self.account)) if (![self.selection containsObject:row[@"id"]]) [remaining addObject:row];
     if (!ApolloHiddenSavedWrite(remaining,self.account)) { ApolloShowToastWithStyle(@"Couldn’t remove posts",@"Your saved posts have been kept. Try again.",ApolloToastStyleError,nil);return; }
     self.rows=remaining;[self updateEmptyState];[self setEditing:NO animated:YES];[self.tableView reloadData];[self updatePlayback];
 }

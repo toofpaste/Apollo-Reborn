@@ -45,12 +45,15 @@ Provider references: [Arctic Shift API](https://github.com/ArthurHeitmann/arctic
 
 ## Hidden Saved
 
-Hold the save/bookmark icon on a post's comments quick bar for five seconds to
-save a local bookmark. A short tap retains Apollo's normal save behavior. Holding
-the save button no longer opens the post-header context menu; holding the
-title, body, or other header controls still opens their usual menus. Hold
-Saved on your own profile for five seconds to open Hidden Saved. Use **Edit**, select posts, then **Remove** to delete hidden bookmarks. Normal Reddit Saved is not used or modified; an item
-previously saved normally remains there until you unsave it normally.
+Saving a post marked NSFW places it in Hidden Saved on this device. Choose
+**Keep Hidden** in the popup to keep it there, or **Save to Reddit Saved** to
+move it to your regular Saved list. The hidden bookmark stays in place until
+Reddit confirms the save.
+
+For other posts, tap the bookmark to save normally, or hold the bookmark on
+the comments quick bar for five seconds to save to Hidden Saved. Hold **Saved**
+on your own profile for five seconds to open Hidden Saved. Use **Edit**, select
+posts, then **Remove** to delete hidden bookmarks.
 
 Compact view shows thumbnails, titles and subreddit names. Expanded view shows
 uncropped media with the title/subreddit below, and a Next image control for
@@ -73,8 +76,12 @@ fixtures, and compiles the tweak. Device checks include the following.
 - All content by default; Only/Exclude NSFW, pagination and rapid filter changes.
 - Open a recent comment on an older post, check its title and local posting time,
   and check wrapping for long titles and larger text sizes.
-- Five-second post save: shorter hold cancels, long hold creates one hidden entry
-  without a normal save; repeated holds deduplicate.
+- Save an NSFW post from the feed, post menu, and comments quick bar. Keep it
+  hidden, repeat the save, and verify a single hidden entry and an unfilled bookmark.
+- Choose Reddit Saved, confirm the regular bookmark and verify the hidden entry
+  disappears. Try the same move offline and verify the hidden entry survives.
+- Tap a regular post’s bookmark for a normal save. Hold it for five seconds for
+  one hidden entry. Repeated holds deduplicate. Check normal unsaves and comment saves.
 - Own-profile Saved hold opens the folder; another user's profile does not.
 - Select/deselect and remove multiple bookmarks while previews load; failed writes
   must preserve selection and saved data.

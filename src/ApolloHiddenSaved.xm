@@ -6,6 +6,12 @@
 #import "ApolloClasses.h"
 #import "ApolloSwiftRuntime.h"
 #import "ApolloHiddenSaved.h"
+#import "UIWindow+Apollo.h"
+
+@protocol ApolloBookmarkLink <NSObject, NSCopying>
+@property(nonatomic, readonly) BOOL isNSFW;
+@property(nonatomic) BOOL saved;
+@end
 
 extern NSString *ApolloUsernameFromProfileViewController(UIViewController *controller);
 static NSURL *HiddenFile(NSString *account) {
@@ -27,6 +33,95 @@ BOOL ApolloHiddenSavedWrite(NSArray *rows, NSString *account) {
     NSData *data = [NSPropertyListSerialization dataWithPropertyList:rows format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];
     return file && data && [data writeToURL:file options:NSDataWritingAtomic | NSDataWritingFileProtectionComplete error:nil];
 }
+static NSString *HiddenPostID(id link) {
+    NSString *identifier = ApolloSendObject(link, @selector(identifier));
+    if (![identifier isKindOfClass:NSString.class]) return nil;
+    if ([identifier hasPrefix:@"t3_"]) identifier = [identifier substringFromIndex:3];
+    NSCharacterSet *invalid = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyz0123456789"] invertedSet];
+    return identifier.length && [identifier rangeOfCharacterFromSet:invalid].location == NSNotFound ? identifier : nil;
+}
+
+// All folder edits run on the main queue and read the current file before writing.
+static BOOL UpdateHiddenBookmark(NSString *account, NSString *identifier, NSString *title) {
+    if (!identifier.length || !account.length) return NO;
+    NSMutableArray *rows = [ApolloHiddenSavedRead(account) mutableCopy];
+    NSIndexSet *matches = [rows indexesOfObjectsPassingTest:^BOOL(NSDictionary *row, NSUInteger index, BOOL *stop) {
+        return [row[@"id"] isEqual:identifier];
+    }];
+    if (!title && !matches.count) return YES;
+    [rows removeObjectsAtIndexes:matches];
+    if (title) [rows insertObject:@{@"id": identifier, @"title": title} atIndex:0];
+    return ApolloHiddenSavedWrite(rows, account);
+}
+
+static NSString *BookmarkTitle(id link) {
+    NSString *title = ApolloSendObject(link, @selector(title));
+    return [title isKindOfClass:NSString.class] ? title : @"Saved post";
+}
+
+static void PublishBookmarkState(id<ApolloBookmarkLink> link, BOOL saved) {
+    link.saved = saved;
+    id updated = [link copyWithZone:NULL];
+    [NSNotificationCenter.defaultCenter postNotificationName:@"com.christianselig.ModelObjectUpdated"
+                                                    object:link userInfo:@{@"newModel": updated}];
+}
+
+static void PresentSaveChoice(UIWindow *window, NSString *account, BOOL stored, dispatch_block_t saveNormally) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:stored ? @"Saved to Hidden Saved" : @"Couldn’t save to Hidden Saved"
+                                                                 message:stored ? @"You can move this post to your Reddit Saved list." : @"You can still save this post to your Reddit Saved list."
+                                                          preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:stored ? @"Keep Hidden" : @"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save to Reddit Saved" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        if ([account isEqual:ApolloActiveAccountUsername().lowercaseString]) saveNormally();
+    }]];
+    dispatch_block_t present = ^{
+        if ([account isEqual:ApolloActiveAccountUsername().lowercaseString]) {
+            [window.visibleViewController presentViewController:alert animated:YES completion:nil];
+        }
+    };
+    // Feed action sheets may still be dismissing when the save is intercepted.
+    id<UIViewControllerTransitionCoordinator> transition = window.visibleViewController.transitionCoordinator;
+    if (![transition animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        dispatch_async(dispatch_get_main_queue(), present);
+    }]) present();
+}
+
+typedef void (^BookmarkSaveCompletion)(NSError *error);
+typedef id (*BookmarkSaveIMP)(id, SEL, id, BookmarkSaveCompletion);
+
+%hook RDKClient
+- (id)saveLink:(id<ApolloBookmarkLink>)link completion:(BookmarkSaveCompletion)completion {
+    if (!link.isNSFW) return %orig;
+    NSString *account = ApolloActiveAccountUsername().lowercaseString;
+    NSString *identifier = HiddenPostID(link);
+    id client = self;
+    BookmarkSaveIMP save = (BookmarkSaveIMP)&%orig;
+    // Native callers publish their optimistic copy immediately after returning
+    // from this method. Correct it once that synchronous update has finished.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (account.length && ![account isEqual:ApolloActiveAccountUsername().lowercaseString]) return;
+        if (link.saved) PublishBookmarkState(link, NO);
+        if (!account.length) {
+            ApolloShowToastWithStyle(@"Couldn’t save", @"Sign in to use Hidden Saved.", ApolloToastStyleError, nil);
+            return;
+        }
+        BOOL stored = UpdateHiddenBookmark(account, identifier, BookmarkTitle(link));
+        PresentSaveChoice(ApolloKeyWindow(), account, stored, ^{
+            save(client, @selector(saveLink:completion:), link, ^(NSError *error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    // Finish the move only after Reddit confirms the normal save.
+                    BOOL removed = error || !stored || UpdateHiddenBookmark(account, identifier, nil);
+                    if (![account isEqual:ApolloActiveAccountUsername().lowercaseString]) return;
+                    if (!error) PublishBookmarkState(link, YES);
+                    if (completion) completion(error);
+                    if (!removed) ApolloShowToastWithStyle(@"Saved to Reddit", @"The Hidden Saved copy couldn’t be removed.", ApolloToastStyleError, nil);
+                });
+            });
+        });
+    });
+    return nil;
+}
+%end
 static UIViewController *Owner(UIView *view) {
     for (UIResponder *r = view; r; r = r.nextResponder) if ([r isKindOfClass:UIViewController.class]) return (UIViewController *)r;
     return nil;
@@ -56,7 +151,9 @@ static UIViewController *Owner(UIView *view) {
         id text = ApolloSendObject(ApolloObjectIvar(self.node, "titleNode"), @selector(attributedText));
         return [text isKindOfClass:NSAttributedString.class] && [[text string] isEqualToString:@"Saved"];
     }
-    return [owner isKindOfClass:ApolloClassCommentsViewController];
+    if (![owner isKindOfClass:ApolloClassCommentsViewController]) return NO;
+    id<ApolloBookmarkLink> link = ApolloObjectIvar(owner, "link");
+    return link && !link.isNSFW;
 }
 - (void)held:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
@@ -67,16 +164,7 @@ static UIViewController *Owner(UIView *view) {
         [owner.navigationController pushViewController:folder animated:YES];
     } else {
         id link = ApolloObjectIvar(owner, "link");
-        NSString *identifier = ApolloSendObject(link, @selector(identifier));
-        NSString *title = ApolloSendObject(link, @selector(title));
-        if (![identifier isKindOfClass:NSString.class] || !identifier.length) return;
-        if ([identifier hasPrefix:@"t3_"]) identifier = [identifier substringFromIndex:3];
-        if ([identifier rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyz0123456789"] invertedSet]].location != NSNotFound) return;
-        NSMutableArray *rows = [ApolloHiddenSavedRead(account) mutableCopy];
-        NSIndexSet *duplicates = [rows indexesOfObjectsPassingTest:^BOOL(NSDictionary *item, NSUInteger index, BOOL *stop) { return [item[@"id"] isEqual:identifier]; }];
-        [rows removeObjectsAtIndexes:duplicates];
-        [rows insertObject:@{@"id":identifier, @"title":[title isKindOfClass:NSString.class] ? title : @"Saved post"} atIndex:0];
-        BOOL saved = ApolloHiddenSavedWrite(rows, account);
+        BOOL saved = UpdateHiddenBookmark(account, HiddenPostID(link), BookmarkTitle(link));
         ApolloShowToastWithStyle(saved ? @"Saved privately" : @"Couldn’t save", saved ? @"Added to Hidden Saved on this device." : @"Please try again.", saved ? ApolloToastStyleSuccess : ApolloToastStyleError, nil);
     }
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
